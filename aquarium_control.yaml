@@ -52,17 +52,17 @@ variables:
 trigger:
   # Brightness setting changes (immediate response)
   - platform: state
-    entity_id: "{{ brightness_control }}"
+    entity_id: !input brightness_control
     id: "brightness_changed"
   
   # Power monitoring trigger
   - platform: state
-    entity_id: "{{ power_sensor }}"
+    entity_id: !input power_sensor
     id: "power_changed"
   
   # Brightness control trigger with delay (for button simulation)
   - platform: state
-    entity_id: "{{ brightness_control }}"
+    entity_id: !input brightness_control
     for:
       seconds: 2
     id: "brightness_control_trigger"
@@ -101,7 +101,7 @@ action:
                 sequence:
                   - service: switch.turn_off
                     target:
-                      entity_id: "{{ aquarium_switch }}"
+                      entity_id: !input aquarium_switch
                   - service: system_log.write
                     data:
                       message: "{{ helper_prefix }}: OFF - brightness set to 0"
@@ -114,7 +114,7 @@ action:
                 sequence:
                   - service: switch.turn_on
                     target:
-                      entity_id: "{{ aquarium_switch }}"
+                      entity_id: !input aquarium_switch
                   - service: system_log.write
                     data:
                       message: "{{ helper_prefix }}: ON - brightness set to {{ current_brightness }}"
@@ -146,7 +146,7 @@ action:
           
           - service: input_number.set_value
             target:
-              entity_id: "{{ brightness_control }}"
+              entity_id: !input brightness_control
             data:
               value: "{{ detected_brightness }}"
           
@@ -199,7 +199,7 @@ action:
                 sequence:
                   - service: switch.turn_off
                     target:
-                      entity_id: "{{ aquarium_switch }}"
+                      entity_id: !input aquarium_switch
                   - if:
                       - condition: template
                         value_template: "{{ needs_blocking and states(zablokowano_entity) != 'unknown' }}"
@@ -225,7 +225,7 @@ action:
                     then:
                       - service: switch.turn_on
                         target:
-                          entity_id: "{{ aquarium_switch }}"
+                          entity_id: !input aquarium_switch
                   
                   # Execute button presses
                   - repeat:
@@ -241,23 +241,23 @@ action:
                                     seconds: 1
                                 - service: switch.turn_off
                                   target:
-                                    entity_id: "{{ aquarium_switch }}"
+                                    entity_id: !input aquarium_switch
                                 - delay:
                                     milliseconds: 1
                                 - service: switch.turn_on
                                   target:
-                                    entity_id: "{{ aquarium_switch }}"
+                                    entity_id: !input aquarium_switch
                           
                           # Without delay (normal case)
                           default:
                             - service: switch.turn_off
                               target:
-                                entity_id: "{{ aquarium_switch }}"
+                                entity_id: !input aquarium_switch
                             - delay:
                                 milliseconds: 1
                             - service: switch.turn_on
                               target:
-                                entity_id: "{{ aquarium_switch }}"
+                                entity_id: !input aquarium_switch
 
           # Update current level (if helper exists)
           - if:
