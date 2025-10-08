@@ -1,0 +1,291 @@
+blueprint:
+  name: "Aquarium Smart Lighting Control"
+  description: >
+    Aquarium lighting control with power monitoring and brightness level control
+    via button press simulation. Converted from Node-RED flow.
+    
+    FIRST: Create input number helper for brightness control (min:0, max:3, step:1)
+    THEN: Use this blueprint with your smart socket and power sensor.
+  
+  domain: automation
+  
+  input:
+    aquarium_switch:
+      name: "Aquarium Smart Socket"
+      description: "Smart socket that controls the aquarium lights and monitors power consumption"
+      selector:
+        entity:
+          domain: switch
+    
+    power_sensor:
+      name: "Power Consumption Sensor"
+      description: "Sensor that monitors the power consumption of the aquarium lights (usually from the smart socket)"
+      selector:
+        entity:
+          domain: sensor
+          device_class: power
+    
+    brightness_control:
+      name: "Brightness Control Input"
+      description: "Input number that controls light intensity (0=off, 1=low, 2=medium, 3=high). Create this in Helpers first."
+      selector:
+        entity:
+          domain: input_number
+
+variables:
+  aquarium_switch: !input aquarium_switch
+  power_sensor: !input power_sensor
+  brightness_control: !input brightness_control
+  
+  # Power thresholds (based on original Node-RED values)
+  threshold_0: 0.5    # 0-0.5W = Level 0 (off)
+  threshold_1: 5.0    # 0.5-5W = Level 1 (low)
+  threshold_2: 9.0    # 6-9W = Level 2 (medium)
+  threshold_3: 15.0   # 11-15W = Level 3 (high)
+  
+  # Create unique helper entity names based on aquarium switch
+  helper_prefix: "{{ aquarium_switch.split('.')[1] }}"
+  trwa_zmiana_entity: "input_boolean.{{ helper_prefix }}_trwa_zmiana"
+  zablokowano_entity: "input_boolean.{{ helper_prefix }}_zablokowano"
+  current_level_entity: "input_number.{{ helper_prefix }}_current_level"
+
+trigger:
+  # Brightness setting changes (immediate response)
+  - platform: state
+    entity_id: "{{ brightness_control }}"
+    id: "brightness_changed"
+  
+  # Power monitoring trigger
+  - platform: state
+    entity_id: "{{ power_sensor }}"
+    id: "power_changed"
+  
+  # Brightness control trigger with delay (for button simulation)
+  - platform: state
+    entity_id: "{{ brightness_control }}"
+    for:
+      seconds: 2
+    id: "brightness_control_trigger"
+  
+  # Home Assistant start
+  - platform: homeassistant
+    event: start
+    id: "ha_start"
+
+condition: []
+
+action:
+  - variables:
+      trigger_id: "{{ trigger.id | default('unknown') }}"
+      current_brightness: "{{ states(brightness_control) | float(0) }}"
+      current_power: "{{ states(power_sensor) | float(0) }}"
+      current_switch_state: "{{ states(aquarium_switch) }}"
+      
+      # Helper entity states (with fallbacks if entities don't exist)
+      trwa_zmiana: "{{ states(trwa_zmiana_entity) == 'on' if states(trwa_zmiana_entity) != 'unknown' else false }}"
+      zablokowano: "{{ states(zablokowano_entity) == 'on' if states(zablokowano_entity) != 'unknown' else false }}"
+      current_level: "{{ states(current_level_entity) | int(0) if states(current_level_entity) != 'unknown' else 0 }}"
+
+  # Route to appropriate logic based on trigger
+  - choose:
+      # BRIGHTNESS CHANGED - Simple on/off control
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger_id in ['brightness_changed', 'ha_start'] }}"
+        sequence:
+          - choose:
+              # If brightness is 0, turn off
+              - conditions:
+                  - condition: template
+                    value_template: "{{ current_brightness == 0 }}"
+                sequence:
+                  - service: switch.turn_off
+                    target:
+                      entity_id: "{{ aquarium_switch }}"
+                  - service: system_log.write
+                    data:
+                      message: "{{ helper_prefix }}: OFF - brightness set to 0"
+                      level: info
+              
+              # If brightness > 0, turn on
+              - conditions:
+                  - condition: template
+                    value_template: "{{ current_brightness > 0 }}"
+                sequence:
+                  - service: switch.turn_on
+                    target:
+                      entity_id: "{{ aquarium_switch }}"
+                  - service: system_log.write
+                    data:
+                      message: "{{ helper_prefix }}: ON - brightness set to {{ current_brightness }}"
+                      level: info
+
+      # POWER MONITORING (from Node-RED power sensor logic)
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger_id in ['power_changed', 'ha_start'] }}"
+          - condition: template
+            value_template: "{{ not trwa_zmiana }}"
+        sequence:
+          - variables:
+              detected_brightness: >
+                {% if current_power >= 0 and current_power < threshold_0 %}
+                  0
+                {% elif current_power >= threshold_0 and current_power < threshold_1 %}
+                  1
+                {% elif current_power >= threshold_1 and current_power < threshold_2 %}
+                  2
+                {% elif current_power >= threshold_2 and current_power <= threshold_3 %}
+                  3
+                {% else %}
+                  null
+                {% endif %}
+          
+          - condition: template
+            value_template: "{{ detected_brightness is not none and detected_brightness != current_brightness }}"
+          
+          - service: input_number.set_value
+            target:
+              entity_id: "{{ brightness_control }}"
+            data:
+              value: "{{ detected_brightness }}"
+          
+          - service: system_log.write
+            data:
+              message: "{{ helper_prefix }}: Power monitor {{ current_power }}W → brightness {{ detected_brightness }}"
+              level: info
+
+      # BUTTON PRESS SIMULATION (from Node-RED brightness change logic)
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger_id == 'brightness_control_trigger' }}"
+          - condition: template
+            value_template: "{{ not zablokowano }}"
+        sequence:
+          - variables:
+              desired_level: "{{ current_brightness | int }}"
+              button_presses: >
+                {% set current = current_level %}
+                {% set desired = desired_level %}
+                {% if current == 3 %}
+                  {% if desired == 0 %}0{% elif desired == 1 %}4{% elif desired == 2 %}2{% else %}0{% endif %}
+                {% elif current == 2 %}
+                  {% if desired == 0 %}0{% elif desired == 1 %}2{% elif desired == 3 %}4{% else %}0{% endif %}
+                {% elif current == 1 %}
+                  {% if desired == 0 %}0{% elif desired == 2 %}4{% elif desired == 3 %}2{% else %}0{% endif %}
+                {% elif current == 0 %}
+                  {% if desired == 1 %}5{% elif desired == 2 %}3{% elif desired == 3 %}1{% else %}0{% endif %}
+                {% else %}0{% endif %}
+              
+              needs_turn_on: "{{ current_level == 0 and desired_level > 0 }}"
+              needs_turn_off: "{{ desired_level == 0 }}"
+              needs_blocking: "{{ desired_level == 0 }}"
+              use_delay: "{{ current_level == 0 and desired_level > 0 }}"
+
+          # Set change in progress (if helper exists)
+          - if:
+              - condition: template
+                value_template: "{{ states(trwa_zmiana_entity) != 'unknown' }}"
+            then:
+              - service: input_boolean.turn_on
+                target:
+                  entity_id: "{{ trwa_zmiana_entity }}"
+
+          - choose:
+              # Turn off case
+              - conditions:
+                  - condition: template
+                    value_template: "{{ needs_turn_off }}"
+                sequence:
+                  - service: switch.turn_off
+                    target:
+                      entity_id: "{{ aquarium_switch }}"
+                  - if:
+                      - condition: template
+                        value_template: "{{ needs_blocking and states(zablokowano_entity) != 'unknown' }}"
+                    then:
+                      - service: input_boolean.turn_on
+                        target:
+                          entity_id: "{{ zablokowano_entity }}"
+                      - delay:
+                          seconds: 10
+                      - service: input_boolean.turn_off
+                        target:
+                          entity_id: "{{ zablokowano_entity }}"
+              
+              # Button press case
+              - conditions:
+                  - condition: template
+                    value_template: "{{ button_presses > 0 }}"
+                sequence:
+                  # Turn on first if needed
+                  - if:
+                      - condition: template
+                        value_template: "{{ needs_turn_on }}"
+                    then:
+                      - service: switch.turn_on
+                        target:
+                          entity_id: "{{ aquarium_switch }}"
+                  
+                  # Execute button presses
+                  - repeat:
+                      count: "{{ button_presses }}"
+                      sequence:
+                        - choose:
+                            # With delay (from level 0)
+                            - conditions:
+                                - condition: template
+                                  value_template: "{{ use_delay }}"
+                              sequence:
+                                - delay:
+                                    seconds: 1
+                                - service: switch.turn_off
+                                  target:
+                                    entity_id: "{{ aquarium_switch }}"
+                                - delay:
+                                    milliseconds: 1
+                                - service: switch.turn_on
+                                  target:
+                                    entity_id: "{{ aquarium_switch }}"
+                          
+                          # Without delay (normal case)
+                          default:
+                            - service: switch.turn_off
+                              target:
+                                entity_id: "{{ aquarium_switch }}"
+                            - delay:
+                                milliseconds: 1
+                            - service: switch.turn_on
+                              target:
+                                entity_id: "{{ aquarium_switch }}"
+
+          # Update current level (if helper exists)
+          - if:
+              - condition: template
+                value_template: "{{ states(current_level_entity) != 'unknown' }}"
+            then:
+              - service: input_number.set_value
+                target:
+                  entity_id: "{{ current_level_entity }}"
+                data:
+                  value: "{{ desired_level }}"
+          
+          # Clear change in progress flag after delay
+          - delay:
+              minutes: 3
+          
+          - if:
+              - condition: template
+                value_template: "{{ states(trwa_zmiana_entity) != 'unknown' }}"
+            then:
+              - service: input_boolean.turn_off
+                target:
+                  entity_id: "{{ trwa_zmiana_entity }}"
+          
+          - service: system_log.write
+            data:
+              message: "{{ helper_prefix }}: Brightness change {{ current_level }} → {{ desired_level }} ({{ button_presses }} presses)"
+              level: info
+
+mode: single
+max_exceeded: silent
