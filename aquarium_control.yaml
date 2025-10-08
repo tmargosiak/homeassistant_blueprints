@@ -33,21 +33,11 @@ blueprint:
           domain: input_number
 
 variables:
-  aquarium_switch: !input aquarium_switch
-  power_sensor: !input power_sensor
-  brightness_control: !input brightness_control
-  
   # Power thresholds (based on original Node-RED values)
   threshold_0: 0.5    # 0-0.5W = Level 0 (off)
   threshold_1: 5.0    # 0.5-5W = Level 1 (low)
   threshold_2: 9.0    # 6-9W = Level 2 (medium)
   threshold_3: 15.0   # 11-15W = Level 3 (high)
-  
-  # Create unique helper entity names based on aquarium switch
-  helper_prefix: "{{ aquarium_switch.split('.')[1] }}"
-  trwa_zmiana_entity: "input_boolean.{{ helper_prefix }}_trwa_zmiana"
-  zablokowano_entity: "input_boolean.{{ helper_prefix }}_zablokowano"
-  current_level_entity: "input_number.{{ helper_prefix }}_current_level"
 
 trigger:
   # Brightness setting changes (immediate response)
@@ -77,9 +67,18 @@ condition: []
 action:
   - variables:
       trigger_id: "{{ trigger.id | default('unknown') }}"
-      current_brightness: "{{ states(brightness_control) | float(0) }}"
-      current_power: "{{ states(power_sensor) | float(0) }}"
-      current_switch_state: "{{ states(aquarium_switch) }}"
+      brightness_input: !input brightness_control
+      power_input: !input power_sensor  
+      switch_input: !input aquarium_switch
+      current_brightness: "{{ states(brightness_input) | float(0) }}"
+      current_power: "{{ states(power_input) | float(0) }}"
+      current_switch_state: "{{ states(switch_input) }}"
+      
+      # Create unique helper entity names based on aquarium switch
+      helper_prefix: "{{ switch_input.split('.')[1] }}"
+      trwa_zmiana_entity: "input_boolean.{{ helper_prefix }}_trwa_zmiana"
+      zablokowano_entity: "input_boolean.{{ helper_prefix }}_zablokowano"
+      current_level_entity: "input_number.{{ helper_prefix }}_current_level"
       
       # Helper entity states (with fallbacks if entities don't exist)
       trwa_zmiana: "{{ states(trwa_zmiana_entity) == 'on' if states(trwa_zmiana_entity) != 'unknown' else false }}"
