@@ -93,6 +93,46 @@ action:
 
   # Route to appropriate logic based on trigger
   - choose:
+      # INITIALIZATION - Set internal state from power reading on startup
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger_id == 'ha_start' }}"
+        sequence:
+          - service: system_log.write
+            data:
+              message: "{{ helper_prefix }}: INITIALIZATION - Reading power to set internal state"
+              level: warning
+          - variables:
+              power_detected_level: >
+                {% if current_switch_state == 'off' %}
+                  0
+                {% elif current_power >= 0 and current_power <= threshold_0 %}
+                  0
+                {% elif current_power > threshold_0 and current_power <= threshold_1 %}
+                  1
+                {% elif current_power > threshold_1 and current_power <= threshold_2 %}
+                  2
+                {% elif current_power > threshold_2 and current_power <= threshold_3 %}
+                  3
+                {% else %}
+                  3
+                {% endif %}
+          
+          # Initialize internal state from power reading
+          - if:
+              - condition: template
+                value_template: "{{ states(current_level_entity) != 'unknown' }}"
+            then:
+              - service: input_number.set_value
+                target:
+                  entity_id: "{{ current_level_entity }}"
+                data:
+                  value: "{{ power_detected_level }}"
+              - service: system_log.write
+                data:
+                  message: "{{ helper_prefix }}: INITIALIZED - Internal state set to {{ power_detected_level }} based on {{ current_power }}W"
+                  level: warning
+
       # BRIGHTNESS CHANGED - Simple on/off control
       - conditions:
           - condition: template
@@ -282,7 +322,7 @@ action:
                       - service: system_log.write
                         data:
                           message: "{{ helper_prefix }}: TURNED ON - Light was off, now at level 3"
-                          level: info
+                          level: warning
                       - delay:
                           seconds: 2
                   
@@ -290,16 +330,24 @@ action:
                   - service: system_log.write
                     data:
                       message: "{{ helper_prefix }}: CYCLING - Executing {{ button_presses }} rapid on/off cycles"
-                      level: info
+                      level: warning
                   
                   - repeat:
                       count: "{{ button_presses }}"
                       sequence:
+                        - service: system_log.write
+                          data:
+                            message: "{{ helper_prefix }}: CYCLE {{ repeat.index }}/{{ button_presses }} - Turning OFF"
+                            level: warning
                         - service: switch.turn_off
                           target:
                             entity_id: !input aquarium_switch
                         - delay:
                             milliseconds: 100
+                        - service: system_log.write
+                          data:
+                            message: "{{ helper_prefix }}: CYCLE {{ repeat.index }}/{{ button_presses }} - Turning ON"
+                            level: warning
                         - service: switch.turn_on
                           target:
                             entity_id: !input aquarium_switch
@@ -309,7 +357,7 @@ action:
                   - service: system_log.write
                     data:
                       message: "{{ helper_prefix }}: CYCLING COMPLETE - Should now be at level {{ desired_level }}"
-                      level: info
+                      level: warning
 
           # Store expected level after button presses (if helper exists)
           - if:
