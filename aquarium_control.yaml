@@ -89,7 +89,7 @@ action:
   - service: system_log.write
     data:
       message: "{{ helper_prefix }}: AUTOMATION TRIGGERED - ID: {{ trigger_id }}, Brightness: {{ current_brightness }}, Power: {{ current_power }}W, Switch: {{ current_switch_state }}"
-      level: info
+      level: warning
 
   # Route to appropriate logic based on trigger
   - choose:
@@ -101,7 +101,7 @@ action:
           - service: system_log.write
             data:
               message: "{{ helper_prefix }}: BRIGHTNESS CONTROL TRIGGERED - Current: {{ current_brightness }}"
-              level: info
+              level: warning
           - choose:
               # If brightness is 0, turn off
               - conditions:
