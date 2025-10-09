@@ -74,12 +74,6 @@ action:
       current_power: "{{ states(power_input) | float(0) }}"
       current_switch_state: "{{ states(switch_input) }}"
 
-  # TRACE: Log every automation trigger
-  - service: system_log.write
-    data:
-      message: "{{ switch_input.split('.')[1] }}: AUTOMATION TRIGGERED - ID: {{ trigger_id }}, Brightness: {{ current_brightness }}, Power: {{ current_power }}W, Switch: {{ current_switch_state }}"
-      level: info
-      
       # Create unique helper entity names based on aquarium switch
       helper_prefix: "{{ switch_input.split('.')[1] }}"
       trwa_zmiana_entity: "input_boolean.{{ helper_prefix }}_trwa_zmiana"
@@ -90,6 +84,12 @@ action:
       trwa_zmiana: "{{ states(trwa_zmiana_entity) == 'on' if states(trwa_zmiana_entity) != 'unknown' else false }}"
       zablokowano: "{{ states(zablokowano_entity) == 'on' if states(zablokowano_entity) != 'unknown' else false }}"
       current_level: "{{ states(current_level_entity) | int(0) if states(current_level_entity) != 'unknown' else 0 }}"
+
+  # TRACE: Log every automation trigger
+  - service: system_log.write
+    data:
+      message: "{{ helper_prefix }}: AUTOMATION TRIGGERED - ID: {{ trigger_id }}, Brightness: {{ current_brightness }}, Power: {{ current_power }}W, Switch: {{ current_switch_state }}"
+      level: info
 
   # Route to appropriate logic based on trigger
   - choose:
