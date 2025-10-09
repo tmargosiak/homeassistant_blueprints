@@ -164,14 +164,15 @@ action:
           
           - service: system_log.write
             data:
-              message: "{{ helper_prefix }}: UPDATING BRIGHTNESS - {{ current_brightness }} → {{ detected_brightness }}"
-              level: info
+              message: "{{ helper_prefix }}: BRIGHTNESS MISMATCH DETECTED - Power {{ current_power }}W suggests level {{ detected_brightness }}, but input is {{ current_brightness }} (not auto-updating)"
+              level: warning
           
-          - service: input_number.set_value
-            target:
-              entity_id: !input brightness_control
-            data:
-              value: "{{ detected_brightness }}"
+          # DISABLED: Auto-update of brightness input to prevent feedback loops
+          # - service: input_number.set_value
+          #   target:
+          #     entity_id: !input brightness_control
+          #   data:
+          #     value: "{{ detected_brightness }}"
           
           - service: system_log.write
             data:
