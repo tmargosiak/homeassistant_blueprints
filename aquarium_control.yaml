@@ -73,6 +73,12 @@ action:
       current_brightness: "{{ states(brightness_input) | float(0) }}"
       current_power: "{{ states(power_input) | float(0) }}"
       current_switch_state: "{{ states(switch_input) }}"
+
+  # TRACE: Log every automation trigger
+  - service: system_log.write
+    data:
+      message: "{{ switch_input.split('.')[1] }}: AUTOMATION TRIGGERED - ID: {{ trigger_id }}, Brightness: {{ current_brightness }}, Power: {{ current_power }}W, Switch: {{ current_switch_state }}"
+      level: info
       
       # Create unique helper entity names based on aquarium switch
       helper_prefix: "{{ switch_input.split('.')[1] }}"
@@ -92,6 +98,10 @@ action:
           - condition: template
             value_template: "{{ trigger_id in ['brightness_changed', 'ha_start'] }}"
         sequence:
+          - service: system_log.write
+            data:
+              message: "{{ helper_prefix }}: BRIGHTNESS CONTROL TRIGGERED - Current: {{ current_brightness }}"
+              level: info
           - choose:
               # If brightness is 0, turn off
               - conditions:
@@ -126,22 +136,36 @@ action:
           - condition: template
             value_template: "{{ not trwa_zmiana }}"
         sequence:
+          - service: system_log.write
+            data:
+              message: "{{ helper_prefix }}: POWER MONITORING TRIGGERED - Power: {{ current_power }}W, Current brightness: {{ current_brightness }}, trwa_zmiana: {{ trwa_zmiana }}"
+              level: info
           - variables:
               detected_brightness: >
                 {% if current_power >= 0 and current_power < threshold_0 %}
                   0
-                {% elif current_power >= threshold_0 and current_power < threshold_1 %}
+                {% elif current_power >= threshold_0 and current_power <= threshold_1 %}
                   1
-                {% elif current_power >= threshold_1 and current_power < threshold_2 %}
+                {% elif current_power > threshold_1 and current_power <= threshold_2 %}
                   2
-                {% elif current_power >= threshold_2 and current_power <= threshold_3 %}
+                {% elif current_power > threshold_2 and current_power <= threshold_3 %}
                   3
                 {% else %}
                   null
                 {% endif %}
           
+          - service: system_log.write
+            data:
+              message: "{{ helper_prefix }}: POWER ANALYSIS - {{ current_power }}W detected as level {{ detected_brightness }}, current setting: {{ current_brightness }}"
+              level: info
+          
           - condition: template
             value_template: "{{ detected_brightness is not none and detected_brightness != current_brightness }}"
+          
+          - service: system_log.write
+            data:
+              message: "{{ helper_prefix }}: UPDATING BRIGHTNESS - {{ current_brightness }} → {{ detected_brightness }}"
+              level: info
           
           - service: input_number.set_value
             target:
@@ -161,6 +185,10 @@ action:
           - condition: template
             value_template: "{{ not zablokowano }}"
         sequence:
+          - service: system_log.write
+            data:
+              message: "{{ helper_prefix }}: BUTTON SIMULATION TRIGGERED - Target: {{ current_brightness }}, Current level: {{ current_level }}, Blocked: {{ zablokowano }}"
+              level: info
           - variables:
               desired_level: "{{ current_brightness | int }}"
               button_presses: >
@@ -269,9 +297,9 @@ action:
                 data:
                   value: "{{ desired_level }}"
           
-          # Clear change in progress flag after delay
+          # Wait for light to stabilize before allowing power monitoring
           - delay:
-              minutes: 3
+              seconds: 5
           
           - if:
               - condition: template
@@ -280,11 +308,32 @@ action:
               - service: input_boolean.turn_off
                 target:
                   entity_id: "{{ trwa_zmiana_entity }}"
+              - service: system_log.write
+                data:
+                  message: "{{ helper_prefix }}: STABILIZATION COMPLETE - Power monitoring re-enabled"
+                  level: info
           
           - service: system_log.write
             data:
               message: "{{ helper_prefix }}: Brightness change {{ current_level }} → {{ desired_level }} ({{ button_presses }} presses)"
               level: info
+
+      # POWER MONITORING BLOCKED - Show when it's being skipped
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger_id in ['power_changed'] and trwa_zmiana }}"
+        sequence:
+          - service: system_log.write
+            data:
+              message: "{{ helper_prefix }}: POWER MONITORING BLOCKED - Change in progress (trwa_zmiana: {{ trwa_zmiana }})"
+              level: info
+
+    # CATCH-ALL: Log unhandled triggers
+    default:
+      - service: system_log.write
+        data:
+          message: "{{ switch_input.split('.')[1] }}: UNHANDLED TRIGGER - ID: {{ trigger_id }}, no matching conditions"
+          level: warning
 
 mode: single
 max_exceeded: silent
