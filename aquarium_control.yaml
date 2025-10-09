@@ -88,7 +88,7 @@ action:
   # TRACE: Log every automation trigger
   - service: system_log.write
     data:
-      message: "{{ helper_prefix }}: AUTOMATION TRIGGERED - ID: {{ trigger_id }}, Brightness: {{ current_brightness }}, Power: {{ current_power }}W, Switch: {{ current_switch_state }}"
+      message: "{{ helper_prefix }}: AUTOMATION TRIGGERED - ID: {{ trigger_id }}, Brightness: {{ current_brightness }}, Power: {{ current_power }}W, Switch: {{ current_switch_state }}, Internal: {{ current_level }}"
       level: warning
 
   # Route to appropriate logic based on trigger
@@ -138,8 +138,8 @@ action:
         sequence:
           - service: system_log.write
             data:
-              message: "{{ helper_prefix }}: POWER MONITORING TRIGGERED - Power: {{ current_power }}W, Current brightness: {{ current_brightness }}, trwa_zmiana: {{ trwa_zmiana }}"
-              level: info
+              message: "{{ helper_prefix }}: POWER MONITORING TRIGGERED - Power: {{ current_power }}W, Input: {{ current_brightness }}, Internal: {{ current_level }}, Blocked: {{ trwa_zmiana }}"
+              level: warning
           - variables:
               detected_brightness: >
                 {% if current_power >= 0 and current_power < threshold_0 %}
@@ -164,7 +164,7 @@ action:
           
           - service: system_log.write
             data:
-              message: "{{ helper_prefix }}: BRIGHTNESS MISMATCH DETECTED - Power {{ current_power }}W suggests level {{ detected_brightness }}, but input is {{ current_brightness }} (not auto-updating)"
+              message: "{{ helper_prefix }}: BRIGHTNESS MISMATCH - Power {{ current_power }}W=Level{{ detected_brightness }}, Input={{ current_brightness }}, Internal={{ current_level }} (not auto-updating)"
               level: warning
           
           # DISABLED: Auto-update of brightness input to prevent feedback loops
@@ -188,8 +188,8 @@ action:
         sequence:
           - service: system_log.write
             data:
-              message: "{{ helper_prefix }}: BUTTON SIMULATION TRIGGERED - Target: {{ current_brightness }}, Current level: {{ current_level }}, Blocked: {{ zablokowano }}"
-              level: info
+              message: "{{ helper_prefix }}: BUTTON SIMULATION TRIGGERED - Target: {{ current_brightness }}, Internal: {{ current_level }}, Blocked: {{ zablokowano }}"
+              level: warning
           - variables:
               desired_level: "{{ current_brightness | int }}"
               
@@ -249,7 +249,7 @@ action:
 
           - service: system_log.write
             data:
-              message: "{{ helper_prefix }}: CONTROL PLAN - Current: {{ estimated_current }}, Target: {{ desired_level }}, Button presses: {{ button_presses }}, Switch state: {{ current_switch_state }}"
+              message: "{{ helper_prefix }}: CONTROL PLAN - Estimated: {{ estimated_current }}, Internal: {{ current_level }}, Target: {{ desired_level }}, Presses: {{ button_presses }}, Switch: {{ current_switch_state }}"
               level: info
 
           - choose:
