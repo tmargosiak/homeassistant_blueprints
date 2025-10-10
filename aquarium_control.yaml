@@ -2,10 +2,11 @@ blueprint:
   name: "Aquarium Smart Lighting Control"
   description: >
     Aquarium lighting control with power monitoring and brightness level control
-    via button press simulation. Converted from Node-RED flow.
+    via button press simulation. Automatically detects current light level from
+    power consumption - no helper entities needed.
     
-    FIRST: Create input number helper for brightness control (min:0, max:3, step:1)
-    THEN: Use this blueprint with your smart socket and power sensor.
+    SETUP: Create input number helper for brightness control (min:0, max:3, step:1)
+    then use this blueprint with your smart socket and power sensor.
   
   domain: automation
   
@@ -74,64 +75,42 @@ action:
       current_power: "{{ states(power_input) | float(0) }}"
       current_switch_state: "{{ states(switch_input) }}"
 
-      # Create unique helper entity names based on aquarium switch
+      # Create unique prefix for logging
       helper_prefix: "{{ switch_input.split('.')[1] }}"
-      trwa_zmiana_entity: "input_boolean.{{ helper_prefix }}_trwa_zmiana"
-      zablokowano_entity: "input_boolean.{{ helper_prefix }}_zablokowano"
-      current_level_entity: "input_number.{{ helper_prefix }}_current_level"
       
-      # Helper entity states (with fallbacks if entities don't exist)
-      trwa_zmiana: "{{ states(trwa_zmiana_entity) == 'on' if states(trwa_zmiana_entity) != 'unknown' else false }}"
-      zablokowano: "{{ states(zablokowano_entity) == 'on' if states(zablokowano_entity) != 'unknown' else false }}"
-      current_level: "{{ states(current_level_entity) | int(0) if states(current_level_entity) != 'unknown' else 0 }}"
+      # Always estimate level from power reading - no persistent state needed
+      current_level: >
+        {% if current_switch_state == 'off' %}
+          0
+        {% elif current_power >= 0 and current_power <= threshold_0 %}
+          0
+        {% elif current_power > threshold_0 and current_power <= threshold_1 %}
+          1
+        {% elif current_power > threshold_1 and current_power <= threshold_2 %}
+          2
+        {% elif current_power > threshold_2 and current_power <= threshold_3 %}
+          3
+        {% else %}
+          3
+        {% endif %}
 
   # TRACE: Log every automation trigger
   - service: system_log.write
     data:
-      message: "{{ helper_prefix }}: AUTOMATION TRIGGERED - ID: {{ trigger_id }}, Brightness: {{ current_brightness }}, Power: {{ current_power }}W, Switch: {{ current_switch_state }}, Internal: {{ current_level }}"
+      message: "{{ helper_prefix }}: AUTOMATION TRIGGERED - ID: {{ trigger_id }}, Brightness: {{ current_brightness }}, Power: {{ current_power }}W, Switch: {{ current_switch_state }}, Current Level: {{ current_level }}"
       level: warning
 
   # Route to appropriate logic based on trigger
   - choose:
-      # INITIALIZATION - Set internal state from power reading on startup
+      # INITIALIZATION - Log current state detected from power reading
       - conditions:
           - condition: template
             value_template: "{{ trigger_id == 'ha_start' }}"
         sequence:
           - service: system_log.write
             data:
-              message: "{{ helper_prefix }}: INITIALIZATION - Reading power to set internal state"
+              message: "{{ helper_prefix }}: INITIALIZATION - Current state detected: Level {{ current_level }} from {{ current_power }}W"
               level: warning
-          - variables:
-              power_detected_level: >
-                {% if current_switch_state == 'off' %}
-                  0
-                {% elif current_power >= 0 and current_power <= threshold_0 %}
-                  0
-                {% elif current_power > threshold_0 and current_power <= threshold_1 %}
-                  1
-                {% elif current_power > threshold_1 and current_power <= threshold_2 %}
-                  2
-                {% elif current_power > threshold_2 and current_power <= threshold_3 %}
-                  3
-                {% else %}
-                  3
-                {% endif %}
-          
-          # Initialize internal state from power reading
-          - if:
-              - condition: template
-                value_template: "{{ states(current_level_entity) != 'unknown' }}"
-            then:
-              - service: input_number.set_value
-                target:
-                  entity_id: "{{ current_level_entity }}"
-                data:
-                  value: "{{ power_detected_level }}"
-              - service: system_log.write
-                data:
-                  message: "{{ helper_prefix }}: INITIALIZED - Internal state set to {{ power_detected_level }} based on {{ current_power }}W"
-                  level: warning
 
       # BRIGHTNESS CHANGED - Simple on/off control
       - conditions:
@@ -173,12 +152,10 @@ action:
       - conditions:
           - condition: template
             value_template: "{{ trigger_id in ['power_changed', 'ha_start'] }}"
-          - condition: template
-            value_template: "{{ not trwa_zmiana }}"
         sequence:
           - service: system_log.write
             data:
-              message: "{{ helper_prefix }}: POWER MONITORING TRIGGERED - Power: {{ current_power }}W, Input: {{ current_brightness }}, Internal: {{ current_level }}, Blocked: {{ trwa_zmiana }}"
+              message: "{{ helper_prefix }}: POWER MONITORING TRIGGERED - Power: {{ current_power }}W, Input: {{ current_brightness }}, Current Level: {{ current_level }}"
               level: warning
           - variables:
               detected_brightness: >
@@ -204,7 +181,7 @@ action:
           
           - service: system_log.write
             data:
-              message: "{{ helper_prefix }}: BRIGHTNESS MISMATCH - Power {{ current_power }}W=Level{{ detected_brightness }}, Input={{ current_brightness }}, Internal={{ current_level }} (not auto-updating)"
+              message: "{{ helper_prefix }}: BRIGHTNESS MISMATCH - Power {{ current_power }}W=Level{{ detected_brightness }}, Input={{ current_brightness }}, Current Level={{ current_level }}"
               level: warning
           
           # DISABLED: Auto-update of brightness input to prevent feedback loops
@@ -223,12 +200,10 @@ action:
       - conditions:
           - condition: template
             value_template: "{{ trigger_id == 'brightness_control_trigger' }}"
-          - condition: template
-            value_template: "{{ not zablokowano }}"
         sequence:
           - service: system_log.write
             data:
-              message: "{{ helper_prefix }}: BUTTON SIMULATION TRIGGERED - Target: {{ current_brightness }}, Internal: {{ current_level }}, Blocked: {{ zablokowano }}"
+              message: "{{ helper_prefix }}: BUTTON SIMULATION TRIGGERED - Target: {{ current_brightness }}, Current Level: {{ current_level }}"
               level: warning
           - variables:
               desired_level: "{{ current_brightness | int }}"
@@ -247,16 +222,14 @@ action:
                   null
                 {% endif %}
               
-              # Use power-based level if available, otherwise use stored level, default to 0 if switch is off
+              # Use power-based level if available, otherwise use current detected level
               estimated_current: >
                 {% if current_switch_state == 'off' %}
                   0
                 {% elif power_based_level is not none %}
                   {{ power_based_level }}
-                {% elif current_level > 0 %}
-                  {{ current_level }}
                 {% else %}
-                  3
+                  {{ current_level }}
                 {% endif %}
               
               # Calculate button presses needed (original Node-RED logic)
@@ -278,18 +251,9 @@ action:
               needs_turn_off: "{{ desired_level == 0 }}"
               is_currently_off: "{{ current_switch_state == 'off' or estimated_current == 0 }}"
 
-          # Set change in progress (if helper exists)
-          - if:
-              - condition: template
-                value_template: "{{ states(trwa_zmiana_entity) != 'unknown' }}"
-            then:
-              - service: input_boolean.turn_on
-                target:
-                  entity_id: "{{ trwa_zmiana_entity }}"
-
           - service: system_log.write
             data:
-              message: "{{ helper_prefix }}: CONTROL PLAN - Estimated: {{ estimated_current }}, Internal: {{ current_level }}, Target: {{ desired_level }}, Presses: {{ button_presses }}, Switch: {{ current_switch_state }}"
+              message: "{{ helper_prefix }}: CONTROL PLAN - Estimated: {{ estimated_current }}, Current: {{ current_level }}, Target: {{ desired_level }}, Presses: {{ button_presses }}, Switch: {{ current_switch_state }}"
               level: info
 
           - choose:
@@ -359,51 +323,14 @@ action:
                       message: "{{ helper_prefix }}: CYCLING COMPLETE - Should now be at level {{ desired_level }}"
                       level: warning
 
-          # Store expected level after button presses (if helper exists)
-          - if:
-              - condition: template
-                value_template: "{{ states(current_level_entity) != 'unknown' }}"
-            then:
-              - service: input_number.set_value
-                target:
-                  entity_id: "{{ current_level_entity }}"
-                data:
-                  value: "{{ desired_level }}"
-              - service: system_log.write
-                data:
-                  message: "{{ helper_prefix }}: LEVEL STORED - Expected level {{ desired_level }} saved for future calculations"
-                  level: info
-          
-          # Wait for light to stabilize before allowing power monitoring
+          # Wait for light to stabilize 
           - delay:
               seconds: 5
           
-          - if:
-              - condition: template
-                value_template: "{{ states(trwa_zmiana_entity) != 'unknown' }}"
-            then:
-              - service: input_boolean.turn_off
-                target:
-                  entity_id: "{{ trwa_zmiana_entity }}"
-              - service: system_log.write
-                data:
-                  message: "{{ helper_prefix }}: STABILIZATION COMPLETE - Power monitoring re-enabled"
-                  level: info
-          
           - service: system_log.write
             data:
-              message: "{{ helper_prefix }}: Brightness change {{ current_level }} → {{ desired_level }} ({{ button_presses }} presses)"
-              level: info
-
-      # POWER MONITORING BLOCKED - Show when it's being skipped
-      - conditions:
-          - condition: template
-            value_template: "{{ trigger_id in ['power_changed'] and trwa_zmiana }}"
-        sequence:
-          - service: system_log.write
-            data:
-              message: "{{ helper_prefix }}: POWER MONITORING BLOCKED - Change in progress (trwa_zmiana: {{ trwa_zmiana }})"
-              level: info
+              message: "{{ helper_prefix }}: Brightness change {{ current_level }} → {{ desired_level }} ({{ button_presses }} presses) - COMPLETE"
+              level: warning
 
     # CATCH-ALL: Log unhandled triggers
     default:
