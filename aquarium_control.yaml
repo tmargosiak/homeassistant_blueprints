@@ -114,7 +114,7 @@ action:
   - service: system_log.write
     data:
       message: "{{ helper_prefix }}: AUTOMATION TRIGGERED - ID: {{ trigger_id }}, Brightness: {{ current_brightness }}, Power: {{ current_power }}W, Switch: {{ current_switch_state }}, Current Level: {{ current_level }}"
-      level: warning
+      level: info
 
   # Route to appropriate logic based on trigger
   - choose:
@@ -238,7 +238,7 @@ action:
           - service: system_log.write
             data:
               message: "{{ helper_prefix }}: CONTROL PLAN - Estimated: {{ estimated_current }}, Current: {{ current_level }}, Target: {{ desired_level }}, Presses: {{ button_presses }}, Switch: {{ current_switch_state }}, TurnOff: {{ needs_turn_off }}"
-              level: warning
+              level: info
 
           - choose:
               # Turn off case
@@ -252,7 +252,7 @@ action:
                   - service: system_log.write
                     data:
                       message: "{{ helper_prefix }}: TURNED OFF - Target brightness was 0"
-                      level: warning
+                      level: info
               
               # Button press case - light needs to be on (level > 0)
               - conditions:
@@ -290,7 +290,7 @@ action:
                             - service: system_log.write
                               data:
                                 message: "{{ helper_prefix }}: CYCLE {{ repeat.index }}/{{ button_presses }} - Turning OFF"
-                                level: warning
+                                level: debug
                             - service: switch.turn_off
                               target:
                                 entity_id: !input aquarium_switch
@@ -299,7 +299,7 @@ action:
                             - service: system_log.write
                               data:
                                 message: "{{ helper_prefix }}: CYCLE {{ repeat.index }}/{{ button_presses }} - Turning ON"
-                                level: warning
+                                level: debug
                             - service: switch.turn_on
                               target:
                                 entity_id: !input aquarium_switch
@@ -309,12 +309,12 @@ action:
                       - service: system_log.write
                         data:
                           message: "{{ helper_prefix }}: NO CYCLING - Already at desired level {{ desired_level }}"
-                          level: info
+                          level: debug
                   
                   - service: system_log.write
                     data:
                       message: "{{ helper_prefix }}: CYCLING COMPLETE - Should now be at level {{ desired_level }}"
-                      level: warning
+                      level: info
 
           # Wait for light to stabilize 
           - delay:
@@ -352,7 +352,7 @@ action:
           - service: system_log.write
             data:
               message: "{{ helper_prefix }}: POST-STABILIZATION - Expected: {{ expected_level }}, Power reading: {{ stabilized_power }}W=Level{{ power_detected_level }}, Mismatch: {{ level_mismatch }}, Input changed: {{ brightness_changed_during_transition }}"
-              level: warning
+              level: debug
           
           # Log level mismatch if detected
           - if:
@@ -420,7 +420,7 @@ action:
                       - service: system_log.write
                         data:
                           message: "{{ helper_prefix }}: ADDITIONAL CHANGE - TURNED OFF"
-                          level: warning
+                          level: info
                   
                   # Additional button presses case
                   - conditions:
@@ -461,12 +461,12 @@ action:
               - service: system_log.write
                 data:
                   message: "{{ helper_prefix }}: ADDITIONAL CHANGE COMPLETE - Final target {{ new_desired_level }} reached"
-                  level: warning
+                  level: info
             else:
               - service: system_log.write
                 data:
                   message: "{{ helper_prefix }}: Brightness change {{ current_level }} → {{ desired_level }} ({{ button_presses }} presses) - COMPLETE"
-                  level: warning
+                  level: info
 
       # PERIODIC VALIDATION - Check state alignment every minute (respecting quiet periods)
       - conditions:
