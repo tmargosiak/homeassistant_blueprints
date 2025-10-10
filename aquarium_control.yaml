@@ -41,11 +41,6 @@ variables:
   threshold_3: 15.0   # 11-15W = Level 3 (high)
 
 trigger:
-  # Brightness setting changes (immediate response)
-  - platform: state
-    entity_id: !input brightness_control
-    id: "brightness_changed"
-  
   # Power monitoring trigger
   - platform: state
     entity_id: !input power_sensor
@@ -112,41 +107,7 @@ action:
               message: "{{ helper_prefix }}: INITIALIZATION - Current state detected: Level {{ current_level }} from {{ current_power }}W"
               level: warning
 
-      # BRIGHTNESS CHANGED - Simple on/off control
-      - conditions:
-          - condition: template
-            value_template: "{{ trigger_id in ['brightness_changed', 'ha_start'] }}"
-        sequence:
-          - service: system_log.write
-            data:
-              message: "{{ helper_prefix }}: BRIGHTNESS CONTROL TRIGGERED - Current: {{ current_brightness }}"
-              level: warning
-          - choose:
-              # If brightness is 0, turn off
-              - conditions:
-                  - condition: template
-                    value_template: "{{ current_brightness == 0 }}"
-                sequence:
-                  - service: switch.turn_off
-                    target:
-                      entity_id: !input aquarium_switch
-                  - service: system_log.write
-                    data:
-                      message: "{{ helper_prefix }}: OFF - brightness set to 0"
-                      level: info
-              
-              # If brightness > 0, turn on
-              - conditions:
-                  - condition: template
-                    value_template: "{{ current_brightness > 0 }}"
-                sequence:
-                  - service: switch.turn_on
-                    target:
-                      entity_id: !input aquarium_switch
-                  - service: system_log.write
-                    data:
-                      message: "{{ helper_prefix }}: ON - brightness set to {{ current_brightness }}"
-                      level: info
+
 
       # POWER MONITORING (from Node-RED power sensor logic)
       - conditions:
@@ -232,20 +193,22 @@ action:
                   {{ current_level }}
                 {% endif %}
               
-              # Calculate button presses needed (original Node-RED logic)
+              # Calculate button presses needed
+              # Hardware: ON→Level 3, then cycles 3→2→1→3→2→1...
+              # Examples: 0→1: ON (3) + 2 cycles (3→2→1), 0→2: ON (3) + 1 cycle (3→2), 0→3: ON (3) + 0 cycles
               button_presses: >
                 {% set current = estimated_current | int %}
                 {% set desired = desired_level %}
                 {% if desired == 0 %}
                   0
                 {% elif current == 0 %}
-                  {% if desired == 1 %}5{% elif desired == 2 %}3{% elif desired == 3 %}1{% else %}0{% endif %}
+                  {% if desired == 1 %}2{% elif desired == 2 %}1{% elif desired == 3 %}0{% else %}0{% endif %}
                 {% elif current == 1 %}
-                  {% if desired == 2 %}4{% elif desired == 3 %}2{% else %}0{% endif %}
+                  {% if desired == 2 %}2{% elif desired == 3 %}1{% else %}0{% endif %}
                 {% elif current == 2 %}
-                  {% if desired == 1 %}2{% elif desired == 3 %}4{% else %}0{% endif %}
+                  {% if desired == 1 %}1{% elif desired == 3 %}2{% else %}0{% endif %}
                 {% elif current == 3 %}
-                  {% if desired == 1 %}4{% elif desired == 2 %}2{% else %}0{% endif %}
+                  {% if desired == 1 %}2{% elif desired == 2 %}1{% else %}0{% endif %}
                 {% else %}0{% endif %}
               
               needs_turn_off: "{{ desired_level == 0 }}"
@@ -270,10 +233,10 @@ action:
                       message: "{{ helper_prefix }}: TURNED OFF - Target brightness was 0"
                       level: info
               
-              # Button press case - light is on and needs level change
+              # Button press case - light needs to be on (level > 0)
               - conditions:
                   - condition: template
-                    value_template: "{{ button_presses > 0 }}"
+                    value_template: "{{ desired_level > 0 }}"
                 sequence:
                   # Turn on first if currently off
                   - if:
@@ -288,35 +251,44 @@ action:
                           message: "{{ helper_prefix }}: TURNED ON - Light was off, now at level 3"
                           level: warning
                       - delay:
-                          seconds: 2
+                          seconds: 1
                   
-                  # Execute rapid on/off cycles to reach desired level
-                  - service: system_log.write
-                    data:
-                      message: "{{ helper_prefix }}: CYCLING - Executing {{ button_presses }} rapid on/off cycles"
-                      level: warning
-                  
-                  - repeat:
-                      count: "{{ button_presses }}"
-                      sequence:
-                        - service: system_log.write
-                          data:
-                            message: "{{ helper_prefix }}: CYCLE {{ repeat.index }}/{{ button_presses }} - Turning OFF"
-                            level: warning
-                        - service: switch.turn_off
-                          target:
-                            entity_id: !input aquarium_switch
-                        - delay:
-                            milliseconds: 100
-                        - service: system_log.write
-                          data:
-                            message: "{{ helper_prefix }}: CYCLE {{ repeat.index }}/{{ button_presses }} - Turning ON"
-                            level: warning
-                        - service: switch.turn_on
-                          target:
-                            entity_id: !input aquarium_switch
-                        - delay:
-                            milliseconds: 500
+                  # Execute rapid on/off cycles to reach desired level (if needed)
+                  - if:
+                      - condition: template
+                        value_template: "{{ button_presses > 0 }}"
+                    then:
+                      - service: system_log.write
+                        data:
+                          message: "{{ helper_prefix }}: CYCLING - Executing {{ button_presses }} rapid on/off cycles"
+                          level: warning
+                      
+                      - repeat:
+                          count: "{{ button_presses }}"
+                          sequence:
+                            - service: system_log.write
+                              data:
+                                message: "{{ helper_prefix }}: CYCLE {{ repeat.index }}/{{ button_presses }} - Turning OFF"
+                                level: warning
+                            - service: switch.turn_off
+                              target:
+                                entity_id: !input aquarium_switch
+                            - delay:
+                                milliseconds: 500
+                            - service: system_log.write
+                              data:
+                                message: "{{ helper_prefix }}: CYCLE {{ repeat.index }}/{{ button_presses }} - Turning ON"
+                                level: warning
+                            - service: switch.turn_on
+                              target:
+                                entity_id: !input aquarium_switch
+                            - delay:
+                                milliseconds: 500
+                    else:
+                      - service: system_log.write
+                        data:
+                          message: "{{ helper_prefix }}: NO CYCLING - Already at desired level {{ desired_level }}"
+                          level: info
                   
                   - service: system_log.write
                     data:
