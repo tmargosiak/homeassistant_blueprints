@@ -320,15 +320,49 @@ action:
           - delay:
               milliseconds: "{{ stabilization_delay }}"
           
-          # Check if brightness input changed during the transition
+          # Check actual power level after stabilization and validate against expected
           - variables:
               final_brightness_input: "{{ states(brightness_input) | float(0) }}"
               brightness_changed_during_transition: "{{ final_brightness_input != current_brightness }}"
+              
+              # Read actual power after stabilization
+              stabilized_power: "{{ states(power_input) | float(0) }}"
+              stabilized_switch_state: "{{ states(switch_input) }}"
+              
+              # Determine what level the power reading indicates
+              power_detected_level: >
+                {% if stabilized_switch_state == 'off' %}
+                  0
+                {% elif stabilized_power >= 0 and stabilized_power <= threshold_0 %}
+                  0
+                {% elif stabilized_power > threshold_0 and stabilized_power <= threshold_1 %}
+                  1
+                {% elif stabilized_power > threshold_1 and stabilized_power <= threshold_2 %}
+                  2
+                {% elif stabilized_power > threshold_2 and stabilized_power <= threshold_3 %}
+                  3
+                {% else %}
+                  3
+                {% endif %}
+              
+              # Our expected level should be the desired_level (what we tried to achieve)
+              expected_level: "{{ desired_level }}"
+              level_mismatch: "{{ power_detected_level != expected_level }}"
           
           - service: system_log.write
             data:
-              message: "{{ helper_prefix }}: POST-CHANGE CHECK - Original target: {{ desired_level }}, Current input: {{ final_brightness_input }}, Changed during transition: {{ brightness_changed_during_transition }}"
+              message: "{{ helper_prefix }}: POST-STABILIZATION - Expected: {{ expected_level }}, Power reading: {{ stabilized_power }}W=Level{{ power_detected_level }}, Mismatch: {{ level_mismatch }}, Input changed: {{ brightness_changed_during_transition }}"
               level: warning
+          
+          # Log level mismatch if detected
+          - if:
+              - condition: template
+                value_template: "{{ level_mismatch }}"
+            then:
+              - service: system_log.write
+                data:
+                  message: "{{ helper_prefix }}: LEVEL MISMATCH DETECTED - Expected Level {{ expected_level }} but power {{ stabilized_power }}W indicates Level {{ power_detected_level }}. Trusting power meter reading."
+                  level: warning
           
           # If brightness input changed during transition, perform additional button simulation
           - if:
@@ -348,27 +382,11 @@ action:
               - variables:
                   new_desired_level: "{{ final_brightness_input | int }}"
                   
-                  # Get current power level after the previous change
-                  current_power_now: "{{ states(power_input) | float(0) }}"
-                  current_switch_state_now: "{{ states(switch_input) }}"
-                  
-                  current_level_now: >
-                    {% if current_switch_state_now == 'off' %}
-                      0
-                    {% elif current_power_now >= 0 and current_power_now <= threshold_0 %}
-                      0
-                    {% elif current_power_now > threshold_0 and current_power_now <= threshold_1 %}
-                      1
-                    {% elif current_power_now > threshold_1 and current_power_now <= threshold_2 %}
-                      2
-                    {% elif current_power_now > threshold_2 and current_power_now <= threshold_3 %}
-                      3
-                    {% else %}
-                      3
-                    {% endif %}
+                  # Use the actual detected level from power meter (not expected level)
+                  actual_current_level: "{{ power_detected_level }}"
                   
                   additional_button_presses: >
-                    {% set current = current_level_now | int %}
+                    {% set current = actual_current_level | int %}
                     {% set desired = new_desired_level %}
                     {% if desired == 0 %}
                       0
@@ -386,7 +404,7 @@ action:
               
               - service: system_log.write
                 data:
-                  message: "{{ helper_prefix }}: ADDITIONAL CHANGE PLAN - Current: {{ current_level_now }}, New Target: {{ new_desired_level }}, Additional Presses: {{ additional_button_presses }}"
+                  message: "{{ helper_prefix }}: ADDITIONAL CHANGE PLAN - Actual Current: {{ actual_current_level }} (from power meter), New Target: {{ new_desired_level }}, Additional Presses: {{ additional_button_presses }}"
                   level: info
               
               # Execute additional changes
