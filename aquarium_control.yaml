@@ -330,41 +330,120 @@ action:
               message: "{{ helper_prefix }}: POST-CHANGE CHECK - Original target: {{ desired_level }}, Current input: {{ final_brightness_input }}, Changed during transition: {{ brightness_changed_during_transition }}"
               level: warning
           
-          # If brightness input changed during transition, trigger another change
+          # If brightness input changed during transition, perform additional button simulation
           - if:
               - condition: template
                 value_template: "{{ brightness_changed_during_transition }}"
             then:
               - service: system_log.write
                 data:
-                  message: "{{ helper_prefix }}: INPUT CHANGED DURING TRANSITION - Retriggering automation for new target: {{ final_brightness_input }}"
+                  message: "{{ helper_prefix }}: INPUT CHANGED DURING TRANSITION - Performing additional change to reach new target: {{ final_brightness_input }}"
                   level: warning
               
-              # Wait a moment to avoid rapid cycling, then trigger the automation again
+              # Wait a moment to avoid rapid cycling
               - delay:
                   seconds: 1
               
-              # Trigger the automation by briefly changing the input back and forth
-              # This forces a state change that will be picked up by the 2-second trigger
-              - service: input_number.set_value
-                target:
-                  entity_id: "{{ brightness_input }}"
-                data:
-                  value: "{{ final_brightness_input - 0.1 if final_brightness_input > 0 else 0.1 }}"
-              
-              - delay:
-                  milliseconds: 100
-              
-              - service: input_number.set_value
-                target:
-                  entity_id: "{{ brightness_input }}"
-                data:
-                  value: "{{ final_brightness_input }}"
+              # Calculate additional button presses needed for the new target
+              - variables:
+                  new_desired_level: "{{ final_brightness_input | int }}"
+                  
+                  # Get current power level after the previous change
+                  current_power_now: "{{ states(power_input) | float(0) }}"
+                  current_switch_state_now: "{{ states(switch_input) }}"
+                  
+                  current_level_now: >
+                    {% if current_switch_state_now == 'off' %}
+                      0
+                    {% elif current_power_now >= 0 and current_power_now <= threshold_0 %}
+                      0
+                    {% elif current_power_now > threshold_0 and current_power_now <= threshold_1 %}
+                      1
+                    {% elif current_power_now > threshold_1 and current_power_now <= threshold_2 %}
+                      2
+                    {% elif current_power_now > threshold_2 and current_power_now <= threshold_3 %}
+                      3
+                    {% else %}
+                      3
+                    {% endif %}
+                  
+                  additional_button_presses: >
+                    {% set current = current_level_now | int %}
+                    {% set desired = new_desired_level %}
+                    {% if desired == 0 %}
+                      0
+                    {% elif current == 0 %}
+                      {% if desired == 1 %}2{% elif desired == 2 %}1{% elif desired == 3 %}0{% else %}0{% endif %}
+                    {% elif current == 1 %}
+                      {% if desired == 2 %}2{% elif desired == 3 %}1{% else %}0{% endif %}
+                    {% elif current == 2 %}
+                      {% if desired == 1 %}1{% elif desired == 3 %}2{% else %}0{% endif %}
+                    {% elif current == 3 %}
+                      {% if desired == 1 %}2{% elif desired == 2 %}1{% else %}0{% endif %}
+                    {% else %}0{% endif %}
+                  
+                  additional_needs_turn_off: "{{ new_desired_level == 0 }}"
               
               - service: system_log.write
                 data:
-                  message: "{{ helper_prefix }}: RETRIGGER INITIATED - New brightness change will be processed in 2 seconds"
+                  message: "{{ helper_prefix }}: ADDITIONAL CHANGE PLAN - Current: {{ current_level_now }}, New Target: {{ new_desired_level }}, Additional Presses: {{ additional_button_presses }}"
                   level: info
+              
+              # Execute additional changes
+              - choose:
+                  # Turn off case
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ additional_needs_turn_off }}"
+                    sequence:
+                      - service: switch.turn_off
+                        target:
+                          entity_id: !input aquarium_switch
+                      - service: system_log.write
+                        data:
+                          message: "{{ helper_prefix }}: ADDITIONAL CHANGE - TURNED OFF"
+                          level: info
+                  
+                  # Additional button presses case
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ additional_button_presses > 0 and new_desired_level > 0 }}"
+                    sequence:
+                      - service: system_log.write
+                        data:
+                          message: "{{ helper_prefix }}: ADDITIONAL CYCLING - Executing {{ additional_button_presses }} more cycles"
+                          level: warning
+                      
+                      - repeat:
+                          count: "{{ additional_button_presses }}"
+                          sequence:
+                            - service: system_log.write
+                              data:
+                                message: "{{ helper_prefix }}: ADDITIONAL CYCLE {{ repeat.index }}/{{ additional_button_presses }} - OFF"
+                                level: warning
+                            - service: switch.turn_off
+                              target:
+                                entity_id: !input aquarium_switch
+                            - delay:
+                                milliseconds: "{{ cycle_off_delay }}"
+                            - service: system_log.write
+                              data:
+                                message: "{{ helper_prefix }}: ADDITIONAL CYCLE {{ repeat.index }}/{{ additional_button_presses }} - ON"
+                                level: warning
+                            - service: switch.turn_on
+                              target:
+                                entity_id: !input aquarium_switch
+                            - delay:
+                                milliseconds: "{{ cycle_on_delay }}"
+              
+              # Final stabilization
+              - delay:
+                  milliseconds: "{{ stabilization_delay }}"
+              
+              - service: system_log.write
+                data:
+                  message: "{{ helper_prefix }}: ADDITIONAL CHANGE COMPLETE - Final target {{ new_desired_level }} reached"
+                  level: warning
             else:
               - service: system_log.write
                 data:
