@@ -320,10 +320,56 @@ action:
           - delay:
               milliseconds: "{{ stabilization_delay }}"
           
+          # Check if brightness input changed during the transition
+          - variables:
+              final_brightness_input: "{{ states(brightness_input) | float(0) }}"
+              brightness_changed_during_transition: "{{ final_brightness_input != current_brightness }}"
+          
           - service: system_log.write
             data:
-              message: "{{ helper_prefix }}: Brightness change {{ current_level }} → {{ desired_level }} ({{ button_presses }} presses) - COMPLETE"
+              message: "{{ helper_prefix }}: POST-CHANGE CHECK - Original target: {{ desired_level }}, Current input: {{ final_brightness_input }}, Changed during transition: {{ brightness_changed_during_transition }}"
               level: warning
+          
+          # If brightness input changed during transition, trigger another change
+          - if:
+              - condition: template
+                value_template: "{{ brightness_changed_during_transition }}"
+            then:
+              - service: system_log.write
+                data:
+                  message: "{{ helper_prefix }}: INPUT CHANGED DURING TRANSITION - Retriggering automation for new target: {{ final_brightness_input }}"
+                  level: warning
+              
+              # Wait a moment to avoid rapid cycling, then trigger the automation again
+              - delay:
+                  seconds: 1
+              
+              # Trigger the automation by briefly changing the input back and forth
+              # This forces a state change that will be picked up by the 2-second trigger
+              - service: input_number.set_value
+                target:
+                  entity_id: "{{ brightness_input }}"
+                data:
+                  value: "{{ final_brightness_input - 0.1 if final_brightness_input > 0 else 0.1 }}"
+              
+              - delay:
+                  milliseconds: 100
+              
+              - service: input_number.set_value
+                target:
+                  entity_id: "{{ brightness_input }}"
+                data:
+                  value: "{{ final_brightness_input }}"
+              
+              - service: system_log.write
+                data:
+                  message: "{{ helper_prefix }}: RETRIGGER INITIATED - New brightness change will be processed in 2 seconds"
+                  level: info
+            else:
+              - service: system_log.write
+                data:
+                  message: "{{ helper_prefix }}: Brightness change {{ current_level }} → {{ desired_level }} ({{ button_presses }} presses) - COMPLETE"
+                  level: warning
 
       # PERIODIC VALIDATION - Check state alignment every minute (respecting quiet periods)
       - conditions:
