@@ -98,13 +98,13 @@ action:
       current_level: >
         {% if current_switch_state == 'off' %}
           0
-        {% elif current_power >= 0 and current_power <= threshold_0 %}
+        {% elif current_power >= 0 and current_power <= (threshold_0 | float) %}
           0
-        {% elif current_power > threshold_0 and current_power <= threshold_1 %}
+        {% elif current_power > (threshold_0 | float) and current_power <= (threshold_1 | float) %}
           1
-        {% elif current_power > threshold_1 and current_power <= threshold_2 %}
+        {% elif current_power > (threshold_1 | float) and current_power <= (threshold_2 | float) %}
           2
-        {% elif current_power > threshold_2 and current_power <= threshold_3 %}
+        {% elif current_power > (threshold_2 | float) and current_power <= (threshold_3 | float) %}
           3
         {% else %}
           3
@@ -192,13 +192,13 @@ action:
               
               # Determine current state - use power reading if recent, otherwise use stored level
               power_based_level: >
-                {% if current_power >= 0 and current_power <= threshold_0 %}
+                {% if current_power >= 0 and current_power <= (threshold_0 | float) %}
                   0
-                {% elif current_power > threshold_0 and current_power <= threshold_1 %}
+                {% elif current_power > (threshold_0 | float) and current_power <= (threshold_1 | float) %}
                   1
-                {% elif current_power > threshold_1 and current_power <= threshold_2 %}
+                {% elif current_power > (threshold_1 | float) and current_power <= (threshold_2 | float) %}
                   2
-                {% elif current_power > threshold_2 and current_power <= threshold_3 %}
+                {% elif current_power > (threshold_2 | float) and current_power <= (threshold_3 | float) %}
                   3
                 {% else %}
                   null
@@ -237,8 +237,8 @@ action:
 
           - service: system_log.write
             data:
-              message: "{{ helper_prefix }}: CONTROL PLAN - Estimated: {{ estimated_current }}, Current: {{ current_level }}, Target: {{ desired_level }}, Presses: {{ button_presses }}, Switch: {{ current_switch_state }}"
-              level: info
+              message: "{{ helper_prefix }}: CONTROL PLAN - Estimated: {{ estimated_current }}, Current: {{ current_level }}, Target: {{ desired_level }}, Presses: {{ button_presses }}, Switch: {{ current_switch_state }}, TurnOff: {{ needs_turn_off }}"
+              level: warning
 
           - choose:
               # Turn off case
@@ -252,7 +252,7 @@ action:
                   - service: system_log.write
                     data:
                       message: "{{ helper_prefix }}: TURNED OFF - Target brightness was 0"
-                      level: info
+                      level: warning
               
               # Button press case - light needs to be on (level > 0)
               - conditions:
@@ -333,13 +333,13 @@ action:
               power_detected_level: >
                 {% if stabilized_switch_state == 'off' %}
                   0
-                {% elif stabilized_power >= 0 and stabilized_power <= threshold_0 %}
+                {% elif stabilized_power >= 0 and stabilized_power <= (threshold_0 | float) %}
                   0
-                {% elif stabilized_power > threshold_0 and stabilized_power <= threshold_1 %}
+                {% elif stabilized_power > (threshold_0 | float) and stabilized_power <= (threshold_1 | float) %}
                   1
-                {% elif stabilized_power > threshold_1 and stabilized_power <= threshold_2 %}
+                {% elif stabilized_power > (threshold_1 | float) and stabilized_power <= (threshold_2 | float) %}
                   2
-                {% elif stabilized_power > threshold_2 and stabilized_power <= threshold_3 %}
+                {% elif stabilized_power > (threshold_2 | float) and stabilized_power <= (threshold_3 | float) %}
                   3
                 {% else %}
                   3
@@ -420,7 +420,7 @@ action:
                       - service: system_log.write
                         data:
                           message: "{{ helper_prefix }}: ADDITIONAL CHANGE - TURNED OFF"
-                          level: info
+                          level: warning
                   
                   # Additional button presses case
                   - conditions:
