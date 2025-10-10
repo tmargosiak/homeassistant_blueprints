@@ -3,7 +3,7 @@ blueprint:
   description: >
     Aquarium lighting control with power monitoring and brightness level control
     via button press simulation. Automatically detects current light level from
-    power consumption - no helper entities needed.
+    power consumption with periodic validation.
     
     SETUP: Create input number helper for brightness control (min:0, max:3, step:1)
     then use this blueprint with your smart socket and power sensor.
@@ -39,6 +39,13 @@ variables:
   threshold_1: 5.0    # 0.5-5W = Level 1 (low)
   threshold_2: 9.0    # 6-9W = Level 2 (medium)
   threshold_3: 15.0   # 11-15W = Level 3 (high)
+  
+  # Timing configuration (all delays in milliseconds)
+  initial_on_delay: 1000            # Wait after turning on before cycling starts
+  cycle_off_delay: 500              # Wait after turning off during each cycle  
+  cycle_on_delay: 500               # Wait after turning on during each cycle
+  stabilization_delay: 5000         # Wait for light stabilization after all changes complete
+  validation_quiet_period: 120000   # Milliseconds to wait after state change before allowing periodic validation (2 minutes)
 
 trigger:
   # Power monitoring trigger
@@ -47,6 +54,7 @@ trigger:
     id: "power_changed"
   
   # Brightness control trigger with delay (for button simulation)
+  # Note: This delay cannot use variables - must be hardcoded in trigger
   - platform: state
     entity_id: !input brightness_control
     for:
@@ -57,6 +65,11 @@ trigger:
   - platform: homeassistant
     event: start
     id: "ha_start"
+  
+  # Periodic validation (every minute) - validates state when no recent changes
+  - platform: time_pattern
+    minutes: "*"
+    id: "periodic_validation"
 
 condition: []
 
@@ -72,6 +85,14 @@ action:
 
       # Create unique prefix for logging
       helper_prefix: "{{ switch_input.split('.')[1] }}"
+      
+      # Use this automation's last_triggered to determine quiet period
+      # If automation never ran button simulation, allow validation immediately
+      last_automation_run: "{{ this.attributes.last_triggered if this.attributes.last_triggered else '1970-01-01T00:00:00+00:00' }}"
+      time_since_last_run: >
+        {% set last_run = as_timestamp(last_automation_run) %}
+        {% set now_time = now().timestamp() %}
+        {{ ((now_time - last_run) * 1000) | int }}
       
       # Always estimate level from power reading - no persistent state needed
       current_level: >
@@ -251,7 +272,7 @@ action:
                           message: "{{ helper_prefix }}: TURNED ON - Light was off, now at level 3"
                           level: warning
                       - delay:
-                          seconds: 1
+                          milliseconds: "{{ initial_on_delay }}"
                   
                   # Execute rapid on/off cycles to reach desired level (if needed)
                   - if:
@@ -274,7 +295,7 @@ action:
                               target:
                                 entity_id: !input aquarium_switch
                             - delay:
-                                milliseconds: 500
+                                milliseconds: "{{ cycle_off_delay }}"
                             - service: system_log.write
                               data:
                                 message: "{{ helper_prefix }}: CYCLE {{ repeat.index }}/{{ button_presses }} - Turning ON"
@@ -283,7 +304,7 @@ action:
                               target:
                                 entity_id: !input aquarium_switch
                             - delay:
-                                milliseconds: 500
+                                milliseconds: "{{ cycle_on_delay }}"
                     else:
                       - service: system_log.write
                         data:
@@ -297,12 +318,65 @@ action:
 
           # Wait for light to stabilize 
           - delay:
-              seconds: 5
+              milliseconds: "{{ stabilization_delay }}"
           
           - service: system_log.write
             data:
               message: "{{ helper_prefix }}: Brightness change {{ current_level }} → {{ desired_level }} ({{ button_presses }} presses) - COMPLETE"
               level: warning
+
+      # PERIODIC VALIDATION - Check state alignment every minute (respecting quiet periods)
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger_id == 'periodic_validation' }}"
+        sequence:
+          - service: system_log.write
+            data:
+              message: "{{ helper_prefix }}: PERIODIC VALIDATION - Time since last run: {{ (time_since_last_run / 1000) | round(0) }}s, Required quiet period: {{ (validation_quiet_period / 1000) | round(0) }}s"
+              level: info
+          
+          # Only proceed if enough time has passed since last automation run
+          - condition: template
+            value_template: "{{ time_since_last_run > validation_quiet_period }}"
+          
+          - service: system_log.write
+            data:
+              message: "{{ helper_prefix }}: PERIODIC VALIDATION ACTIVE - Power: {{ current_power }}W, Input: {{ current_brightness }}, Current Level: {{ current_level }}"
+              level: warning
+          
+          - variables:
+              validation_detected_brightness: >
+                {% if current_power >= 0 and current_power < threshold_0 %}
+                  0
+                {% elif current_power >= threshold_0 and current_power <= threshold_1 %}
+                  1
+                {% elif current_power > threshold_1 and current_power <= threshold_2 %}
+                  2
+                {% elif current_power > threshold_2 and current_power <= threshold_3 %}
+                  3
+                {% else %}
+                  null
+                {% endif %}
+          
+          - service: system_log.write
+            data:
+              message: "{{ helper_prefix }}: PERIODIC VALIDATION ANALYSIS - {{ current_power }}W detected as level {{ validation_detected_brightness }}, input setting: {{ current_brightness }}"
+              level: info
+          
+          # Log mismatch if detected
+          - if:
+              - condition: template
+                value_template: "{{ validation_detected_brightness is not none and validation_detected_brightness != current_brightness }}"
+            then:
+              - service: system_log.write
+                data:
+                  message: "{{ helper_prefix }}: PERIODIC VALIDATION MISMATCH - Power {{ current_power }}W=Level{{ validation_detected_brightness }}, but Input={{ current_brightness }}. Consider manual correction."
+                  level: warning
+            else:
+              - service: system_log.write
+                data:
+                  message: "{{ helper_prefix }}: PERIODIC VALIDATION OK - State aligned: Level {{ validation_detected_brightness }}"
+                  level: info
 
     # CATCH-ALL: Log unhandled triggers
     default:
