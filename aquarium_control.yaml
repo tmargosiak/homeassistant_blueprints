@@ -138,7 +138,7 @@ action:
           - service: system_log.write
             data:
               message: "{{ helper_prefix }}: POWER MONITORING TRIGGERED - Power: {{ current_power }}W, Input: {{ current_brightness }}, Current Level: {{ current_level }}"
-              level: warning
+              level: info
           - variables:
               detected_brightness: >
                 {% if current_power >= 0 and current_power < threshold_0 %}
@@ -186,7 +186,7 @@ action:
           - service: system_log.write
             data:
               message: "{{ helper_prefix }}: BUTTON SIMULATION TRIGGERED - Target: {{ current_brightness }}, Current Level: {{ current_level }}"
-              level: warning
+              level: info
           - variables:
               desired_level: "{{ current_brightness | int }}"
               
