@@ -46,6 +46,8 @@ variables:
   cycle_on_delay: 500               # Wait after turning on during each cycle
   stabilization_delay: 60000        # Wait for light stabilization after all changes complete (60 seconds)
   validation_quiet_period: 120000   # Milliseconds to wait after state change before allowing periodic validation (2 minutes)
+  
+
 
 trigger:
   # Power monitoring trigger
@@ -96,19 +98,23 @@ action:
       
       # Always estimate level from power reading - no persistent state needed
       current_level: >
-        {% if current_switch_state == 'off' %}
+        {% set power = current_power %}
+        {% set switch_state = current_switch_state %}
+        {% if switch_state == 'off' %}
           0
-        {% elif current_power >= 0 and current_power <= (threshold_0 | float) %}
+        {% elif power >= 0 and power <= (threshold_0 | float) %}
           0
-        {% elif current_power > (threshold_0 | float) and current_power <= (threshold_1 | float) %}
+        {% elif power > (threshold_0 | float) and power <= (threshold_1 | float) %}
           1
-        {% elif current_power > (threshold_1 | float) and current_power <= (threshold_2 | float) %}
+        {% elif power > (threshold_1 | float) and power <= (threshold_2 | float) %}
           2
-        {% elif current_power > (threshold_2 | float) and current_power <= (threshold_3 | float) %}
+        {% elif power > (threshold_2 | float) and power <= (threshold_3 | float) %}
           3
         {% else %}
           3
         {% endif %}
+      
+
 
   # TRACE: Log every automation trigger
   - service: system_log.write
@@ -152,17 +158,12 @@ action:
               - stop: ""
           - variables:
               detected_brightness: >
-                {% if current_power >= 0 and current_power < threshold_0 %}
-                  0
-                {% elif current_power >= threshold_0 and current_power <= threshold_1 %}
-                  1
-                {% elif current_power > threshold_1 and current_power <= threshold_2 %}
-                  2
-                {% elif current_power > threshold_2 and current_power <= threshold_3 %}
-                  3
-                {% else %}
-                  null
-                {% endif %}
+                {%- if current_switch_state == 'off' -%}0
+                {%- elif current_power <= threshold_0 -%}0
+                {%- elif current_power <= threshold_1 -%}1
+                {%- elif current_power <= threshold_2 -%}2
+                {%- elif current_power <= threshold_3 -%}3
+                {%- else -%}3{%- endif -%}
           
           - service: system_log.write
             data:
@@ -215,33 +216,17 @@ action:
                   null
                 {% endif %}
               
-              # Use power-based level if available, otherwise use current detected level
+              # Use power-based level if available, otherwise use current detected level  
               estimated_current: >
-                {% if current_switch_state == 'off' %}
-                  0
-                {% elif power_based_level is not none %}
-                  {{ power_based_level }}
-                {% else %}
-                  {{ current_level }}
-                {% endif %}
+                {%- if current_switch_state == 'off' -%}0
+                {%- elif power_based_level is not none -%}{{ power_based_level }}
+                {%- else -%}{{ current_level }}{%- endif -%}
               
-              # Calculate button presses needed
+              # Calculate button presses needed (using lookup table for conciseness)
               # Hardware: ON→Level 3, then cycles 3→2→1→3→2→1...
-              # Examples: 0→1: ON (3) + 2 cycles (3→2→1), 0→2: ON (3) + 1 cycle (3→2), 0→3: ON (3) + 0 cycles
               button_presses: >
-                {% set current = estimated_current | int %}
-                {% set desired = desired_level %}
-                {% if desired == 0 %}
-                  0
-                {% elif current == 0 %}
-                  {% if desired == 1 %}2{% elif desired == 2 %}1{% elif desired == 3 %}0{% else %}0{% endif %}
-                {% elif current == 1 %}
-                  {% if desired == 2 %}2{% elif desired == 3 %}1{% else %}0{% endif %}
-                {% elif current == 2 %}
-                  {% if desired == 1 %}1{% elif desired == 3 %}2{% else %}0{% endif %}
-                {% elif current == 3 %}
-                  {% if desired == 1 %}2{% elif desired == 2 %}1{% else %}0{% endif %}
-                {% else %}0{% endif %}
+                {%- set lookup = {'0->1':2,'0->2':1,'0->3':0,'1->2':2,'1->3':1,'1->0':0,'2->1':1,'2->3':2,'2->0':0,'3->1':2,'3->2':1,'3->0':0} -%}
+                {{ lookup.get((estimated_current|int)~'->'~desired_level, 0) }}
               
               needs_turn_off: "{{ desired_level == 0 }}"
               is_currently_off: "{{ current_switch_state == 'off' or estimated_current == 0 }}"
@@ -370,14 +355,111 @@ action:
               message: "{{ helper_prefix }}: POST-STABILIZATION - Expected: {{ expected_level }}, Power reading: {{ stabilized_power }}W=Level{{ power_detected_level }}, Mismatch: {{ level_mismatch }}, Input changed: {{ brightness_changed_during_transition }}"
               level: warning
           
-          # Log level mismatch if detected
+          # Auto-correct level mismatch if detected
           - if:
               - condition: template
                 value_template: "{{ level_mismatch }}"
             then:
               - service: system_log.write
                 data:
-                  message: "{{ helper_prefix }}: LEVEL MISMATCH DETECTED - Expected Level {{ expected_level }} but power {{ stabilized_power }}W indicates Level {{ power_detected_level }}. Trusting power meter reading."
+                  message: "{{ helper_prefix }}: LEVEL MISMATCH DETECTED - Expected Level {{ expected_level }} but power {{ stabilized_power }}W indicates Level {{ power_detected_level }}. AUTO-CORRECTING..."
+                  level: warning
+              
+              # Calculate correction button presses needed
+              - variables:
+                  correction_target: "{{ expected_level }}"
+                  correction_current: "{{ power_detected_level }}"
+                  correction_button_presses: >
+                    {%- set lookup = {'0->1':2,'0->2':1,'0->3':0,'1->2':2,'1->3':1,'1->0':0,'2->1':1,'2->3':2,'2->0':0,'3->1':2,'3->2':1,'3->0':0} -%}
+                    {{ lookup.get((correction_current|int)~'->'~correction_target, 0) }}
+                  correction_needs_turn_off: "{{ correction_target == 0 }}"
+              
+              - service: system_log.write
+                data:
+                  message: "{{ helper_prefix }}: AUTO-CORRECTION PLAN - Current Level: {{ correction_current }}, Target Level: {{ correction_target }}, Button Presses: {{ correction_button_presses }}, Turn Off: {{ correction_needs_turn_off }}"
+                  level: warning
+              
+              # Execute correction
+              - choose:
+                  # Turn off case
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ correction_needs_turn_off }}"
+                    sequence:
+                      - service: switch.turn_off
+                        target:
+                          entity_id: !input aquarium_switch
+                      - service: system_log.write
+                        data:
+                          message: "{{ helper_prefix }}: AUTO-CORRECTION - TURNED OFF to reach Level 0"
+                          level: warning
+                  
+                  # Button press correction case
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ correction_button_presses > 0 and correction_target > 0 }}"
+                    sequence:
+                      - service: system_log.write
+                        data:
+                          message: "{{ helper_prefix }}: AUTO-CORRECTION CYCLING - Executing {{ correction_button_presses }} cycles to reach Level {{ correction_target }}"
+                          level: warning
+                      
+                      - repeat:
+                          count: "{{ correction_button_presses }}"
+                          sequence:
+                            - service: system_log.write
+                              data:
+                                message: "{{ helper_prefix }}: CORRECTION CYCLE {{ repeat.index }}/{{ correction_button_presses }} - OFF"
+                                level: warning
+                            - service: switch.turn_off
+                              target:
+                                entity_id: !input aquarium_switch
+                            - delay:
+                                milliseconds: "{{ cycle_off_delay }}"
+                            - service: system_log.write
+                              data:
+                                message: "{{ helper_prefix }}: CORRECTION CYCLE {{ repeat.index }}/{{ correction_button_presses }} - ON"
+                                level: warning
+                            - service: switch.turn_on
+                              target:
+                                entity_id: !input aquarium_switch
+                            - delay:
+                                milliseconds: "{{ cycle_on_delay }}"
+                  
+                # No correction needed
+                default:
+                  - service: system_log.write
+                    data:
+                      message: "{{ helper_prefix }}: AUTO-CORRECTION - No button presses needed, already at target level"
+                      level: info
+              
+              # Wait for stabilization after correction
+              - delay:
+                  milliseconds: "{{ stabilization_delay }}"
+              
+              # Verify correction was successful
+              - variables:
+                  corrected_power: "{{ states(power_input) | float(0) }}"
+                  corrected_switch_state: "{{ states(switch_input) }}"
+                  corrected_level: >
+                    {% if corrected_switch_state == 'off' %}
+                      0
+                    {% elif corrected_power >= 0 and corrected_power <= (threshold_0 | float) %}
+                      0
+                    {% elif corrected_power > (threshold_0 | float) and corrected_power <= (threshold_1 | float) %}
+                      1
+                    {% elif corrected_power > (threshold_1 | float) and corrected_power <= (threshold_2 | float) %}
+                      2
+                    {% elif corrected_power > (threshold_2 | float) and corrected_power <= (threshold_3 | float) %}
+                      3
+                    {% else %}
+                      3
+                    {% endif %}
+                  correction_successful: "{{ corrected_level == expected_level }}"
+              
+              - service: system_log.write
+                data:
+                  message: "{{ helper_prefix }}: AUTO-CORRECTION RESULT - Target: Level {{ expected_level }}, Final: {{ corrected_power }}W=Level{{ corrected_level }}, Success: {{ correction_successful }}"
                   level: warning
           
           # If brightness input changed during transition, perform additional button simulation
@@ -402,19 +484,8 @@ action:
                   actual_current_level: "{{ power_detected_level }}"
                   
                   additional_button_presses: >
-                    {% set current = actual_current_level | int %}
-                    {% set desired = new_desired_level %}
-                    {% if desired == 0 %}
-                      0
-                    {% elif current == 0 %}
-                      {% if desired == 1 %}2{% elif desired == 2 %}1{% elif desired == 3 %}0{% else %}0{% endif %}
-                    {% elif current == 1 %}
-                      {% if desired == 2 %}2{% elif desired == 3 %}1{% else %}0{% endif %}
-                    {% elif current == 2 %}
-                      {% if desired == 1 %}1{% elif desired == 3 %}2{% else %}0{% endif %}
-                    {% elif current == 3 %}
-                      {% if desired == 1 %}2{% elif desired == 2 %}1{% else %}0{% endif %}
-                    {% else %}0{% endif %}
+                    {%- set lookup = {'0->1':2,'0->2':1,'0->3':0,'1->2':2,'1->3':1,'1->0':0,'2->1':1,'2->3':2,'2->0':0,'3->1':2,'3->2':1,'3->0':0} -%}
+                    {{ lookup.get((actual_current_level|int)~'->'~new_desired_level, 0) }}
                   
                   additional_needs_turn_off: "{{ new_desired_level == 0 }}"
               
@@ -523,31 +594,106 @@ action:
           
           - variables:
               validation_detected_brightness: >
-                {% if current_power >= 0 and current_power < threshold_0 %}
-                  0
-                {% elif current_power >= threshold_0 and current_power <= threshold_1 %}
-                  1
-                {% elif current_power > threshold_1 and current_power <= threshold_2 %}
-                  2
-                {% elif current_power > threshold_2 and current_power <= threshold_3 %}
-                  3
-                {% else %}
-                  null
-                {% endif %}
+                {%- if current_switch_state == 'off' -%}0
+                {%- elif current_power <= threshold_0 -%}0
+                {%- elif current_power <= threshold_1 -%}1
+                {%- elif current_power <= threshold_2 -%}2
+                {%- elif current_power <= threshold_3 -%}3
+                {%- else -%}3{%- endif -%}
           
           - service: system_log.write
             data:
               message: "{{ helper_prefix }}: PERIODIC VALIDATION ANALYSIS - {{ current_power }}W detected as level {{ validation_detected_brightness }}, input setting: {{ current_brightness }}"
               level: info
           
-          # Log mismatch if detected
+          # Auto-correct mismatch if detected during periodic validation
           - if:
               - condition: template
                 value_template: "{{ validation_detected_brightness is not none and validation_detected_brightness != current_brightness }}"
             then:
               - service: system_log.write
                 data:
-                  message: "{{ helper_prefix }}: PERIODIC VALIDATION MISMATCH - Power {{ current_power }}W=Level{{ validation_detected_brightness }}, but Input={{ current_brightness }}. Consider manual correction."
+                  message: "{{ helper_prefix }}: PERIODIC VALIDATION MISMATCH - Power {{ current_power }}W=Level{{ validation_detected_brightness }}, but Input={{ current_brightness }}. AUTO-CORRECTING..."
+                  level: warning
+              
+              # Calculate correction for periodic validation
+              - variables:
+                  periodic_correction_target: "{{ current_brightness | int }}"
+                  periodic_correction_current: "{{ validation_detected_brightness }}"
+                  periodic_correction_button_presses: >
+                    {%- set lookup = {'0->1':2,'0->2':1,'0->3':0,'1->2':2,'1->3':1,'1->0':0,'2->1':1,'2->3':2,'2->0':0,'3->1':2,'3->2':1,'3->0':0} -%}
+                    {{ lookup.get((periodic_correction_current|int)~'->'~periodic_correction_target, 0) }}
+                  periodic_correction_needs_turn_off: "{{ periodic_correction_target == 0 }}"
+              
+              - service: system_log.write
+                data:
+                  message: "{{ helper_prefix }}: PERIODIC AUTO-CORRECTION - Current: Level {{ periodic_correction_current }}, Target: Level {{ periodic_correction_target }}, Presses: {{ periodic_correction_button_presses }}"
+                  level: warning
+              
+              # Execute periodic correction
+              - choose:
+                  # Turn off case
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ periodic_correction_needs_turn_off }}"
+                    sequence:
+                      - service: switch.turn_off
+                        target:
+                          entity_id: !input aquarium_switch
+                      - service: system_log.write
+                        data:
+                          message: "{{ helper_prefix }}: PERIODIC AUTO-CORRECTION - TURNED OFF"
+                          level: warning
+                  
+                  # Button press correction case
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ periodic_correction_button_presses > 0 and periodic_correction_target > 0 }}"
+                    sequence:
+                      # Turn on first if currently off
+                      - if:
+                          - condition: template
+                            value_template: "{{ current_switch_state == 'off' }}"
+                        then:
+                          - service: switch.turn_on
+                            target:
+                              entity_id: !input aquarium_switch
+                          - service: system_log.write
+                            data:
+                              message: "{{ helper_prefix }}: PERIODIC AUTO-CORRECTION - TURNED ON first"
+                              level: warning
+                          - delay:
+                              milliseconds: "{{ initial_on_delay }}"
+                      
+                      - service: system_log.write
+                        data:
+                          message: "{{ helper_prefix }}: PERIODIC AUTO-CORRECTION CYCLING - {{ periodic_correction_button_presses }} cycles"
+                          level: warning
+                      
+                      - repeat:
+                          count: "{{ periodic_correction_button_presses }}"
+                          sequence:
+                            - service: switch.turn_off
+                              target:
+                                entity_id: !input aquarium_switch
+                            - delay:
+                                milliseconds: "{{ cycle_off_delay }}"
+                            - service: switch.turn_on
+                              target:
+                                entity_id: !input aquarium_switch
+                            - delay:
+                                milliseconds: "{{ cycle_on_delay }}"
+                
+                # No correction needed
+                default:
+                  - service: system_log.write
+                    data:
+                      message: "{{ helper_prefix }}: PERIODIC AUTO-CORRECTION - No action needed"
+                      level: info
+              
+              - service: system_log.write
+                data:
+                  message: "{{ helper_prefix }}: PERIODIC AUTO-CORRECTION COMPLETE"
                   level: warning
             else:
               - service: system_log.write
