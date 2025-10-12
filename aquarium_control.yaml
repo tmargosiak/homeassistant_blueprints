@@ -44,7 +44,7 @@ variables:
   initial_on_delay: 1000            # Wait after turning on before cycling starts
   cycle_off_delay: 500              # Wait after turning off during each cycle  
   cycle_on_delay: 500               # Wait after turning on during each cycle
-  stabilization_delay: 5000         # Wait for light stabilization after all changes complete
+  stabilization_delay: 60000        # Wait for light stabilization after all changes complete (60 seconds)
   validation_quiet_period: 120000   # Milliseconds to wait after state change before allowing periodic validation (2 minutes)
 
 trigger:
@@ -137,8 +137,19 @@ action:
         sequence:
           - service: system_log.write
             data:
-              message: "{{ helper_prefix }}: POWER MONITORING TRIGGERED - Power: {{ current_power }}W, Input: {{ current_brightness }}, Current Level: {{ current_level }}"
+              message: "{{ helper_prefix }}: POWER MONITORING TRIGGERED - Power: {{ current_power }}W, Input: {{ current_brightness }}, Current Level: {{ current_level }}, Time since last run: {{ (time_since_last_run / 1000) | round(0) }}s"
               level: info
+          
+          # Skip power monitoring if too soon after button simulation (within stabilization period)
+          - if:
+              - condition: template
+                value_template: "{{ trigger_id == 'power_changed' and time_since_last_run < stabilization_delay }}"
+            then:
+              - service: system_log.write
+                data:
+                  message: "{{ helper_prefix }}: POWER MONITORING SKIPPED - Only {{ (time_since_last_run / 1000) | round(0) }}s since last button simulation, waiting {{ (stabilization_delay / 1000) | round(0) }}s for stabilization"
+                  level: info
+              - stop: ""
           - variables:
               detected_brightness: >
                 {% if current_power >= 0 and current_power < threshold_0 %}
@@ -316,16 +327,21 @@ action:
                       message: "{{ helper_prefix }}: CYCLING COMPLETE - Should now be at level {{ desired_level }}"
                       level: info
 
-          # Wait for light to stabilize 
+          # Wait for light to stabilize (60 seconds)
           - delay:
               milliseconds: "{{ stabilization_delay }}"
+          
+          - service: system_log.write
+            data:
+              message: "{{ helper_prefix }}: STABILIZATION COMPLETE - Reading power after {{ (stabilization_delay / 1000) | round(0) }} seconds"
+              level: info
           
           # Check actual power level after stabilization and validate against expected
           - variables:
               final_brightness_input: "{{ states(brightness_input) | float(0) }}"
               brightness_changed_during_transition: "{{ final_brightness_input != current_brightness }}"
               
-              # Read actual power after stabilization
+              # Read actual power after stabilization - force a fresh reading
               stabilized_power: "{{ states(power_input) | float(0) }}"
               stabilized_switch_state: "{{ states(switch_input) }}"
               
@@ -352,7 +368,7 @@ action:
           - service: system_log.write
             data:
               message: "{{ helper_prefix }}: POST-STABILIZATION - Expected: {{ expected_level }}, Power reading: {{ stabilized_power }}W=Level{{ power_detected_level }}, Mismatch: {{ level_mismatch }}, Input changed: {{ brightness_changed_during_transition }}"
-              level: debug
+              level: warning
           
           # Log level mismatch if detected
           - if:
@@ -454,13 +470,31 @@ action:
                             - delay:
                                 milliseconds: "{{ cycle_on_delay }}"
               
-              # Final stabilization
+              # Final stabilization for additional changes
               - delay:
                   milliseconds: "{{ stabilization_delay }}"
               
+              # Final power reading after additional changes
+              - variables:
+                  final_stabilized_power: "{{ states(power_input) | float(0) }}"
+                  final_power_detected_level: >
+                    {% if states(switch_input) == 'off' %}
+                      0
+                    {% elif final_stabilized_power >= 0 and final_stabilized_power <= (threshold_0 | float) %}
+                      0
+                    {% elif final_stabilized_power > (threshold_0 | float) and final_stabilized_power <= (threshold_1 | float) %}
+                      1
+                    {% elif final_stabilized_power > (threshold_1 | float) and final_stabilized_power <= (threshold_2 | float) %}
+                      2
+                    {% elif final_stabilized_power > (threshold_2 | float) and final_stabilized_power <= (threshold_3 | float) %}
+                      3
+                    {% else %}
+                      3
+                    {% endif %}
+              
               - service: system_log.write
                 data:
-                  message: "{{ helper_prefix }}: ADDITIONAL CHANGE COMPLETE - Final target {{ new_desired_level }} reached"
+                  message: "{{ helper_prefix }}: ADDITIONAL CHANGE COMPLETE - Final target {{ new_desired_level }}, Final power: {{ final_stabilized_power }}W=Level{{ final_power_detected_level }}"
                   level: info
             else:
               - service: system_log.write
