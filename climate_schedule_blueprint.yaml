@@ -33,6 +33,8 @@ triggers:
       - !input heating_mode_entity
 conditions: []
 actions:
+  - variables:
+      schedule_entity: !input schedule_entity
   - if:
       - condition: state
         entity_id: !input heating_mode_entity
