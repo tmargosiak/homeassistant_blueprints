@@ -33,13 +33,13 @@ triggers:
       - !input heating_mode_entity
 conditions: []
 actions:
-  - variables:
-      schedule_entity: !input schedule_entity
   - if:
       - condition: state
         entity_id: !input heating_mode_entity
         state: Normalnie
     then:
+      - variables:
+          schedule_entity: !input schedule_entity
       - action: climate.set_temperature
         target:
           entity_id: !input climate_entity
