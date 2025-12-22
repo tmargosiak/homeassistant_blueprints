@@ -1,0 +1,59 @@
+blueprint:
+  name: Climate Schedule Control
+  description: Set climate temperature based on schedule with heating mode control
+  domain: automation
+  input:
+    schedule_entity:
+      name: Schedule
+      description: Schedule entity that provides temperature values
+      selector:
+        entity:
+          domain: schedule
+    climate_entity:
+      name: Climate Device
+      description: Climate device to control
+      selector:
+        entity:
+          domain: climate
+    heating_mode_entity:
+      name: Heating Mode Selector
+      description: Input select entity that controls heating mode
+      selector:
+        entity:
+          domain: input_select
+
+mode: single
+triggers:
+  - trigger: state
+    entity_id:
+      - !input schedule_entity
+    attribute: temperature
+  - trigger: state
+    entity_id:
+      - !input heating_mode_entity
+conditions: []
+actions:
+  - if:
+      - condition: state
+        entity_id: !input heating_mode_entity
+        state: Normalnie
+    then:
+      - action: climate.set_temperature
+        target:
+          entity_id: !input climate_entity
+        data:
+          hvac_mode: heat
+          temperature: >-
+            {% set schedule_temp = state_attr(schedule_entity | string, 'temperature') %}
+            {% if schedule_temp is mapping %}
+              {{ (schedule_temp.get('temperature') or 16) | float(16) }}
+            {% else %}
+              {{ (schedule_temp or 16) | float(16) }}
+            {% endif %}
+    else:
+      - action: climate.set_temperature
+        target:
+          entity_id: !input climate_entity
+        data:
+          hvac_mode: 'off'
+          temperature: 16.0
