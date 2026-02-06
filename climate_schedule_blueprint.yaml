@@ -21,6 +21,12 @@ blueprint:
       selector:
         entity:
           domain: input_select
+    room_heating_mode_entity:
+      name: Room Heating Mode Selector
+      description: Input select entity that controls room heating mode
+      selector:
+        entity:
+          domain: input_select
 
 mode: single
 triggers:
@@ -31,14 +37,31 @@ triggers:
   - trigger: state
     entity_id:
       - !input heating_mode_entity
+  - trigger: state
+    entity_id:
+      - !input room_heating_mode_entity
 conditions: []
 actions:
   - variables:
       schedule_entity_id: !input schedule_entity
+      heating_mode_entity_id: !input heating_mode_entity
+      room_heating_mode_entity_id: !input room_heating_mode_entity
+      main_heating_mode: >-
+        {{ states(heating_mode_entity_id) }}
+      room_heating_mode: >-
+        {{ states(room_heating_mode_entity_id) }}
+      effective_heating_mode: >-
+        {% if main_heating_mode == 'Normalnie' %}
+          {{ room_heating_mode }}
+        {% else %}
+          {{ main_heating_mode }}
+        {% endif %}
   - if:
       - condition: state
         entity_id: !input heating_mode_entity
         state: Normalnie
+      - condition: template
+        value_template: "{{ effective_heating_mode == 'Normalnie' }}"
     then:
       - action: climate.set_temperature
         target:
