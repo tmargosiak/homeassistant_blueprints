@@ -65,15 +65,7 @@ actions:
           entity_id: !input climate_entity
         data:
           hvac_mode: heat
-          temperature: >-
-            {% set schedule_temp = state_attr(schedule_entity_id, 'temperature') %}
-            {% if schedule_temp is mapping %}
-              {{ (schedule_temp.get('temperature') or 16) | float(16) }}
-            {% elif schedule_temp is not none %}
-              {{ (schedule_temp or 16) | float(16) }}
-            {% else %}
-              16
-            {% endif %}
+          temperature: "{{ (state_attr(schedule_entity_id, 'temperature') or 16) | float(16) }}"
     else:
       - action: climate.set_temperature
         target:
