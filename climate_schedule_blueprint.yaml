@@ -57,9 +57,6 @@ actions:
           {{ main_heating_mode }}
         {% endif %}
   - if:
-      - condition: state
-        entity_id: !input heating_mode_entity
-        state: Normalnie
       - condition: template
         value_template: "{{ effective_heating_mode == 'Normalnie' }}"
     then:
@@ -77,6 +74,16 @@ actions:
             {% else %}
               16
             {% endif %}
+    elif:
+      - condition: template
+        value_template: "{{ effective_heating_mode == 'W domu' }}"
+    then:
+      - action: climate.set_temperature
+        target:
+          entity_id: !input climate_entity
+        data:
+          hvac_mode: heat
+          temperature: 21.5
     else:
       - action: climate.set_temperature
         target:
