@@ -75,20 +75,9 @@ actions:
               16
             {% endif %}
     else:
-      - if:
-          - condition: template
-            value_template: "{{ effective_heating_mode == 'W domu' }}"
-        then:
-          - action: climate.set_temperature
-            target:
-              entity_id: !input climate_entity
-            data:
-              hvac_mode: heat
-              temperature: 21.5
-        else:
-          - action: climate.set_temperature
-            target:
-              entity_id: !input climate_entity
-            data:
-              hvac_mode: 'off'
-              temperature: 16.0
+      - action: climate.set_temperature
+        target:
+          entity_id: !input climate_entity
+        data:
+          hvac_mode: 'off'
+          temperature: 16.0
